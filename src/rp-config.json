@@ -1,0 +1,14 @@
+{
+  "rpFormats": {
+    "1.6": 1,
+    "1.11": 2,
+    "1.12": 3,
+    "1.13": 4,
+    "1.14": 5,
+    "1.16": 6,
+    "1.20.5+": 13
+  },
+  "maxSearchResults": 50,
+  "defaultSearchLimit": 10,
+  "packPngMaxSizeBytes": 51200
+}
