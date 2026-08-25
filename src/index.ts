@@ -19,11 +19,65 @@ import AdmZip from "adm-zip";
  *   - get_rp_info: Get detailed info about a Modrinth resource pack by slug/id
  */
 
+// ── Lightweight .env loader (no external dependency) ───────────────────
+function loadEnvFile(): void {
+  const envPath = path.join(__dirname, "..", ".env");
+  if (fs.existsSync(envPath)) {
+    try {
+      for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq <= 0) continue;
+        const key = trimmed.slice(0, eq).trim();
+        let value = trimmed.slice(eq + 1).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (!(key in process.env)) process.env[key] = value;
+      }
+    } catch { /* ignore malformed .env */ }
+  }
+}
+loadEnvFile();
+
+// ── rp-config.json（可外部扩展的默认配置）─────────────────────────────
+function loadRpConfig(): any {
+  const builtin = {
+    rpFormats: {
+      "1.6": 1, "1.11": 2, "1.12": 3, "1.13": 4, "1.14": 5, "1.16": 6, "1.20.5+": 13,
+    },
+    maxSearchResults: 50,
+    defaultSearchLimit: 10,
+    packPngMaxSizeBytes: 51200,
+  };
+  try {
+    const p = path.join(__dirname, "rp-config.json");
+    if (!fs.existsSync(p)) return builtin;
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
+    return { ...builtin, ...parsed };
+  } catch {
+    return builtin;
+  }
+}
+const RP_CONFIG = loadRpConfig();
+
+// 可配置项：环境变量 > .env 文件 > rp-config.json > 内置默认值
+const envIconKb = parseInt(process.env.RP_ASSISTANT_PACK_ICON_MAX_KB || "", 10);
+const CONFIG = {
+  modrinthBase: process.env.RP_ASSISTANT_MODRINTH_API_BASE || "https://api.modrinth.com/v2",
+  userAgent: process.env.RP_ASSISTANT_USER_AGENT || "mc-rp-assistant-mcp/1.0",
+  textureMaxBytes: (parseFloat(process.env.RP_ASSISTANT_TEXTURE_MAX_MB || "2") || 2) * 1024 * 1024,
+  packIconBytes: (envIconKb || Math.round((RP_CONFIG.packPngMaxSizeBytes || 51200) / 1024)) * 1024,
+  defaultSearchLimit: parseInt(process.env.RP_ASSISTANT_DEFAULT_SEARCH_LIMIT || String(RP_CONFIG.defaultSearchLimit || 10), 10) || 10,
+  maxSearchResults: parseInt(process.env.RP_ASSISTANT_MAX_SEARCH_RESULTS || String(RP_CONFIG.maxSearchResults || 50), 10) || 50,
+};
+
 // ── Modrinth API helpers ───────────────────────────────────────────────
 async function fetchJSON(url: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const client = url.startsWith("https") ? require("node:https") : require("node:http");
-    client.get(url, { headers: { "User-Agent": "mc-rp-assistant-mcp/1.0" } }, (res) => {
+    client.get(url, { headers: { "User-Agent": CONFIG.userAgent } }, (res) => {
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
@@ -68,10 +122,10 @@ function packVersionToFormat(mcVersion: string): number {
 }
 
 function formatToPackVersion(format: number): string {
-  const map: Record<number, string> = {
-    1: "1.6", 2: "1.11", 3: "1.12", 4: "1.13", 5: "1.14",
-    6: "1.16", 13: "1.20.5+",
-  };
+  const map: Record<number, string> = {};
+  for (const [ver, fmt] of Object.entries(RP_CONFIG.rpFormats ?? {})) {
+    map[fmt as number] = ver;
+  }
   return map[format] ?? `format-${format}`;
 }
 
@@ -220,8 +274,8 @@ function validateRpStructure(packDir: string, mcVersion?: string): { valid: bool
   if (fs.existsSync(packPng)) {
     const stat = fs.statSync(packPng);
     info.packPngSize = stat.size;
-    if (stat.size > 50 * 1024) {
-      warnings.push(`pack.png is ${Math.round(stat.size / 1024)}KB — consider compressing (recommended < 50KB)`);
+    if (stat.size > CONFIG.packIconBytes) {
+      warnings.push(`pack.png is ${Math.round(stat.size / 1024)}KB — consider compressing (recommended < ${Math.round(CONFIG.packIconBytes / 1024)}KB)`);
     }
   } else {
     warnings.push("No pack.png found (icon will not display in pack selection)");
@@ -306,8 +360,8 @@ function compareRpacks(oldPackDir: string, newPackDir: string): { added: string[
 function validateTextures(packDir: string): { issues: string[]; stats: Record<string, any> } {
   const issues: string[] = [];
   const stats: Record<string, any> = { totalTextures: 0, largeTextures: 0, namingIssues: 0, totalSizeBytes: 0 };
-  const MAX_TEXTURE_BYTES = 2 * 1024 * 1024; // 2MB
-  const MAX_PACK_ICON_BYTES = 50 * 1024; // 50KB
+  const MAX_TEXTURE_BYTES = CONFIG.textureMaxBytes; // 单张纹理大小上限，默认 2MB
+  const MAX_PACK_ICON_BYTES = CONFIG.packIconBytes; // 包图标大小上限，默认 50KB
 
   function walkTextures(dir: string, prefix: string) {
     if (!fs.existsSync(dir)) return;
@@ -598,9 +652,10 @@ export function compareRpacksDiffExport(oldPackPath: string, newPackPath: string
 /**
  * Search Modrinth for resource packs.
  */
-export async function searchRpOnModrinth(query: string, limit: number = 10): Promise<any[]> {
+export async function searchRpOnModrinth(query: string, limit: number = CONFIG.defaultSearchLimit): Promise<any[]> {
   try {
-    const data = await fetchJSON(`https://api.modrinth.com/v2/search?query=${encodeURIComponent(query)}&type=resourcepack&limit=${limit}`);
+    const capped = Math.max(1, Math.min(limit, CONFIG.maxSearchResults));
+    const data = await fetchJSON(`${CONFIG.modrinthBase}/search?query=${encodeURIComponent(query)}&type=resourcepack&limit=${capped}`);
     return (data.hits || []).map((h: any) => ({
       id: h.id,
       slug: h.slug,
@@ -621,7 +676,7 @@ export async function searchRpOnModrinth(query: string, limit: number = 10): Pro
  */
 export async function getRpInfo(slugOrId: string): Promise<any | null> {
   try {
-    const data = await fetchJSON(`https://api.modrinth.com/v2/project/${slugOrId}`);
+    const data = await fetchJSON(`${CONFIG.modrinthBase}/project/${slugOrId}`);
     return {
       id: data.id,
       slug: data.slug,
@@ -721,7 +776,7 @@ function main() {
       limit: z.number().optional().describe("Max results (default: 10, max: 50)"),
     },
     async ({ query, limit }) => {
-      const results = await searchRpOnModrinth(query, limit || 10);
+      const results = await searchRpOnModrinth(query, limit || CONFIG.defaultSearchLimit);
       return {
         content: [{ type: "text", text: JSON.stringify(results, null, 2) }],
       };
