@@ -1,0 +1,20 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dcd887/mc-rp-assistant",
+  "description": "Minecraft 资源包助手：贴图清单、模型校验、语言文件检查",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/dcd887/mc-rp-assistant-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mc-rp-assistant-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
