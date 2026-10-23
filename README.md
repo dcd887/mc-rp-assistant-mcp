@@ -1,5 +1,7 @@
 # mc-rp-assistant-mcp
 
+[![M8ven Verified](https://m8ven.ai/badge/mcp/dcd887/mc-rp-assistant-mcp?variant=verified)](https://m8ven.ai/mcp/dcd887/mc-rp-assistant-mcp?s=readme)
+
 MCP server for Minecraft resource pack analysis, validation, and management. Reads pack.mcmeta, validates structure, lists assets, compares packs, and queries Modrinth.
 
 ## Tools
